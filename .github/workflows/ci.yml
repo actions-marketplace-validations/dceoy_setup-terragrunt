@@ -1,0 +1,91 @@
+---
+name: Tests
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+jobs:
+  local-test:
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash -euo pipefail {0}
+        working-directory: .
+    strategy:
+      matrix:
+        include:
+          - tg-version: latest
+            tg-directory: /usr/local/bin
+          - tg-version: 0.93.11
+            tg-directory: .
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+        with:
+          persist-credentials: false
+      - name: Setup Terragrunt
+        id: setup-terragrunt
+        uses: ./
+        with:
+          terragrunt-version: ${{ matrix.tg-version }}
+          directory-path: ${{ matrix.tg-directory }}
+      - name: Verify Terragrunt installation
+        env:
+          INPUT_TG_VERSION: ${{ matrix.tg-version }}
+          OUTPUT_TG_VERSION: ${{ steps.setup-terragrunt.outputs.terragrunt-version }}
+          OUTPUT_TG_PATH: ${{ steps.setup-terragrunt.outputs.terragrunt-path }}
+        run: |
+          if [[ -z "${OUTPUT_TG_VERSION}" ]]; then
+            echo "Terragrunt version output is empty." >&2
+            exit 1
+          fi
+          if [[ -z "${OUTPUT_TG_PATH}" ]] || [[ ! -x "${OUTPUT_TG_PATH}" ]]; then
+            echo "Terragrunt path '${OUTPUT_TG_PATH}' is missing or not executable." >&2
+            exit 2
+          fi
+          if [[ "${OUTPUT_TG_VERSION}" == "latest" ]] && [[ "${OUTPUT_TG_VERSION}" != "v${INPUT_TG_VERSION}" ]]; then
+            echo "Expected version ${INPUT_TG_VERSION}, but got ${OUTPUT_TG_VERSION}." >&2
+            exit 3
+          fi
+          actual_version="$("${OUTPUT_TG_PATH}" --version | sed 's/^terragrunt version //')"
+          if [[ "${actual_version#v}" != "${OUTPUT_TG_VERSION#v}" ]]; then
+            echo "Terragrunt binary version ${actual_version#v} does not match expected version ${OUTPUT_TG_VERSION#v}." >&2
+            exit 4
+          fi
+          printf 'Terragrunt %s installed at %s\n' "${actual_version}" "${OUTPUT_TG_PATH}"
+  published-version-test:
+    if: >
+      github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]'
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Terragrunt
+        uses: dceoy/setup-terragrunt@v2  # zizmor: ignore[unpinned-uses]
+  github-actions-lint-and-scan:
+    permissions:
+      contents: read
+    uses: dceoy/gh-actions-for-devops/.github/workflows/github-actions-lint-and-scan.yml@main
+    with:
+      search-path: .github/workflows
+      go-version: stable
+      python-version: 3.x
+  dependabot-auto-merge:
+    if: >
+      github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]'
+    needs:
+      - local-test
+      - published-version-test
+      - github-actions-lint-and-scan
+    uses: dceoy/gh-actions-for-devops/.github/workflows/dependabot-auto-merge.yml@main
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: read
+    with:
+      unconditional: true
